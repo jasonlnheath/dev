@@ -1,0 +1,66 @@
+# Project directories - tracked in their own repos
+AutoDev/
+HeathAudio/
+claw-code/
+claw-code-local/
+docker-osx-au-testing/
+lines-project/
+llama.cpp/
+mal/
+moltlang/
+photo-app/
+
+# Misc directories that don't belong
+.beans.yml
+.claw/
+.clawd-agents/
+.clawd-todos.json
+.vscode/
+DockerOSX/
+PluginTestPilot/
+WebView2/
+dbgview64.exe
+gemma4-vllm/
+librosa/
+mal-python-impl/
+microsoft.web.webview2.nupkg
+nul
+null
+plugin-analyser/
+reevr/
+robloxdev/
+rustup-init.exe
+tests/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vs/
+.idea/
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# OODA driver artifacts
+.ooda_hint_request.md
+.ooda_hint.md
+.checkpoints/
+
+# MAL stress test artifacts
+mal-stress-test/.context_step*.txt
+mal-stress-test/.checkpoints/
+
+# Logs and screenshots
+*.jpg
+*.png
+*.xcf
+*.log
+
+# Local config
+.claude/
+.qwen_last_response.txt
+.mcp.json

@@ -1,0 +1,123 @@
+Write step6_file.py. It is step5_tco.py with these additions:
+
+1. Add *ARGV* to repl_env: repl_env[Symbol('*ARGV*')] = List(sys.argv[2:])  (first 2 args are python and script)
+
+2. Add eval special form: when first == 'eval', evaluate eval_(ast[1], env) in repl_env (the top-level env). This means eval_ needs access to repl_env. Pass it as a parameter or use a global.
+
+3. Define load-file using rep: eval_(read('(def! load-file (fn* (f) (eval (read-string (str "(do " (slurp f) "\\nnil)")))))'), repl_env)
+
+This needs these core functions to already be registered (they ARE in core.ns):
+- read-string: parse a MAL string
+- slurp: read a file
+- str: concatenate strings (non-readable)
+- eval: the eval special form above
+
+Since eval_ needs access to repl_env for the eval special form, the simplest approach is to make repl_env a module-level variable and reference it directly.
+
+Here is the exact structure:
+
+```python
+import sys
+from mal_types import (Number, Symbol, List, Vector, Map, Fn, Error, Env,
+                        Nil, Boolean, String)
+from reader import read
+from env import call_env
+import core
+
+repl_env = None  # set in main()
+
+class _TCO:
+    __slots__ = ('ast', 'env')
+    def __init__(self, ast, env):
+        self.ast = ast
+        self.env = env
+
+def eval_(ast, env):
+    while True:
+        if isinstance(ast, Symbol):
+            if ast in env:
+                return env[ast]
+            raise Error(f"'{ast}' not found")
+        if isinstance(ast, Map):
+            return Map((k, eval_(v, env)) for k, v in ast.items())
+        if isinstance(ast, Vector):
+            return Vector(eval_(x, env) for x in ast)
+        if not isinstance(ast, List):
+            return ast
+        if not ast:
+            return ast
+
+        first = ast[0]
+        if isinstance(first, Symbol):
+            if first == 'def!':
+                val = eval_(ast[2], env)
+                env[ast[1]] = val
+                return val
+            if first == 'let*':
+                let_env = Env(mappings={}, outer=env)
+                items = list(ast[1])
+                for i in range(0, len(items), 2):
+                    let_env[items[i]] = eval_(items[i + 1], let_env)
+                ast = ast[2]
+                env = let_env
+                continue
+            if first == 'do':
+                for x in ast[1:-1]:
+                    eval_(x, env)
+                ast = ast[-1]
+                continue
+            if first == 'if':
+                cond = eval_(ast[1], env)
+                if cond is not Nil.NIL and cond is not Boolean.FALSE:
+                    ast = ast[2]
+                elif len(ast) > 3:
+                    ast = ast[3]
+                else:
+                    return Nil.NIL
+                continue
+            if first == 'fn*':
+                params, body = ast[1], ast[2]
+                def make_closure(captured_env):
+                    def closure(args):
+                        return _TCO(body, call_env(captured_env, params, args))
+                    return closure
+                return Fn(make_closure(env))
+            if first == 'eval':
+                ast = eval_(ast[1], env)
+                env = repl_env
+                continue
+
+        proc = eval_(first, env)
+        if isinstance(proc, Fn):
+            args = [eval_(x, env) for x in ast[1:]]
+            result = proc.call(args)
+            if isinstance(result, _TCO):
+                ast = result.ast
+                env = result.env
+                continue
+            return result
+        raise Error(f'cannot apply {proc}')
+
+def main():
+    global repl_env
+    repl_env = Env(mappings={})
+    for name, fn in core.ns.items():
+        repl_env[name] = fn
+    repl_env[Symbol('*ARGV*')] = List(sys.argv[2:])
+    eval_(read('(def! not (fn* (a) (if a false true)))'), repl_env)
+    eval_(read('(def! load-file (fn* (f) (eval (read-string (str "(do " (slurp f) "\\nnil)")))))'), repl_env)
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            print(str(eval_(read(line), repl_env)))
+        except Exception as exc:
+            print(f'Error: {exc}')
+
+if __name__ == '__main__':
+    main()
+```
+
+Write the COMPLETE file exactly as shown. No additions. No markdown fences.

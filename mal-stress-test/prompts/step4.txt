@@ -1,0 +1,37 @@
+Write step4_if_fn_do.py for a MAL interpreter.
+
+IMPORTS (exact):
+  import sys
+  from mal_types import Number, Symbol, List, Vector, Map, Fn, Error, Env, Nil, Boolean, String
+  from reader import read
+  from env import call_env
+  import core
+
+eval_ function handles these types (in order):
+1. Symbol: if ast in env: return env[ast], else raise Error(f"'{ast}' not found")
+2. Map: return Map((k, eval_(v, env)) for k, v in ast.items())
+3. Vector: return Vector(eval_(x, env) for x in ast)
+4. List (empty): return ast
+5. List with special forms (check BEFORE evaluating first element):
+   a) def!: val = eval_(ast[2], env); env[ast[1]] = val; return val
+   b) let*: let_env = Env(mappings={}, outer=env); items = list(ast[1]); for i in range(0,len(items),2): let_env[items[i]] = eval_(items[i+1], let_env); return eval_(ast[2], let_env)
+   c) do: evaluate all elements from ast[1:] using eval_, return LAST result. If only 1 element, return Nil.NIL.
+   d) if: cond = eval_(ast[1], env); if cond is not Nil.NIL and cond is not Boolean.FALSE: return eval_(ast[2], env); elif len(ast) > 3: return eval_(ast[3], env); else: return Nil.NIL
+   e) fn*: return Fn(lambda args: eval_(ast[2], call_env(env, ast[1], args))). This creates a closure that captures the current env and binds params to args when called.
+6. Function call: proc = eval_(first, env); if isinstance(proc, Fn): return proc.call([eval_(x, env) for x in ast[1:]])
+7. Otherwise return ast
+
+repl_env setup:
+  repl_env = Env(mappings={})
+  for name, fn in core.ns.items():
+      repl_env[name] = fn
+  Also add: rep('(def! not (fn* (a) (if a false true)))')
+
+Main: for line in sys.stdin, strip, skip empty, try: print(str(eval_(read(line), repl_env))), except Exception as exc: print(f'Error: {exc}')
+
+TYPE RULES:
+- Number extends int. No .value. Fn has .call(args) method. Symbol extends str.
+- Nil.NIL is the nil value. Boolean.TRUE and Boolean.FALSE for booleans.
+- Compare: first == 'def!' (Symbol extends str). Never use Symbol('def!').
+
+Write the COMPLETE file. No comments. No markdown fences. No extra features.

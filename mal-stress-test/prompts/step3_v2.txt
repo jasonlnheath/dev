@@ -1,0 +1,27 @@
+Fix step3_env.py. The code is almost correct but let* has TWO bugs.
+
+BUG 1: let* iterates over the form elements instead of the bindings list.
+  WRONG: for i in range(1, len(ast) - 1, 2): name = ast[i]
+  RIGHT: bindings = list(ast[1])  # ast[1] is the bindings List/Vector
+         for i in range(0, len(bindings), 2):
+             name = bindings[i]
+             val = eval_(bindings[i+1], let_env)
+             let_env[name] = val
+
+BUG 2: let* evaluates in env instead of let_env.
+  WRONG: val = eval_(ast[i+1], env)
+  RIGHT: val = eval_(bindings[i+1], let_env)  # must use let_env so later bindings see earlier ones
+
+The correct let* handler is:
+  if first == 'let*':
+      let_env = Env(outer=env)
+      items = list(ast[1])
+      for i in range(0, len(items), 2):
+          let_env[items[i]] = eval_(items[i+1], let_env)
+      return eval_(ast[2], let_env)
+
+Everything else in the code is correct. Write the COMPLETE fixed file.
+Use these exact imports:
+  import sys
+  from mal_types import Number, Symbol, List, Vector, Map, Fn, Error, Env
+  from reader import read

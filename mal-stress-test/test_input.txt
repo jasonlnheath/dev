@@ -1,0 +1,5 @@
+(load-file '../tests/computations.mal')
+(def! start-time (time-ms))
+(sumdown 10)
+(def! end-time (time-ms))
+(> end-time start-time)

@@ -1,0 +1,32 @@
+The step6 code has a critical bug: fn* closures return _TCO objects, but core functions like swap! call them directly and expect real values. The _TCO approach breaks core.py.
+
+Fix: remove the _TCO class. Instead, store metadata on the closure function so eval_ can detect mal functions and do TCO. The closure itself calls eval_ directly (works for core callers). eval_ checks metadata to do TCO loop.
+
+Change fn* to:
+```python
+if first == 'fn*':
+    params, body = ast[1], ast[2]
+    def make_closure(captured_env):
+        def closure(args):
+            return eval_(body, call_env(captured_env, params, args))
+        closure._ast = body
+        closure._env = captured_env
+        closure._params = params
+        return closure
+    return Fn(make_closure(env))
+```
+
+Change function call to:
+```python
+proc = eval_(first, env)
+if isinstance(proc, Fn):
+    args = [eval_(x, env) for x in ast[1:]]
+    fn_call = proc.call if hasattr(proc, 'call') else proc
+    if hasattr(fn_call, '_ast'):
+        ast = fn_call._ast
+        env = call_env(fn_call._env, fn_call._params, args)
+        continue
+    return fn_call(args)
+```
+
+Remove the _TCO class entirely. Keep everything else identical. Write the COMPLETE file.

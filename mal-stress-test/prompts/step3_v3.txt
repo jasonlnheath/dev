@@ -1,0 +1,18 @@
+Write step3_env.py. It is IDENTICAL to step2_eval.py except:
+
+1. Add Env import: from mal_types import Number, Symbol, List, Vector, Map, Fn, Error, Env
+2. Change repl_env to use Env(mappings={...}) instead of plain dict
+3. In the List branch of eval_, BEFORE the function call logic, add two special forms:
+
+   if first == 'def!':
+       val = eval_(ast[2], env)
+       env[ast[1]] = val
+       return val
+   if first == 'let*':
+       let_env = Env(outer=env)
+       items = list(ast[1])
+       for i in range(0, len(items), 2):
+           let_env[items[i]] = eval_(items[i+1], let_env)
+       return eval_(ast[2], let_env)
+
+That is ALL. No other changes from step2_eval.py. Write the COMPLETE file.

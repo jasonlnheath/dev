@@ -1,0 +1,9 @@
+Testing: stepA_mal.py with tests/stepA_mal.mal
+[FAIL] Line 10: "hello"
+  Expected: "\"hello\""
+  Got:      "hello"
+[FAIL] Line 305: (> (time-ms) start-time)
+  Expected: true
+  Got:      false
+
+Results: 111 passed, 2 failed, 113 total

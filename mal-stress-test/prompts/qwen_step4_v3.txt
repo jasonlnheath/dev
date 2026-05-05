@@ -1,0 +1,56 @@
+You have this working eval_ from step3. It passes all step3 tests:
+
+import sys
+from mal_types import Number, Symbol, List, Vector, Map, Fn, Error, Env
+from reader import read
+from env import call_env
+import core
+
+
+def eval_(ast, env):
+    if isinstance(ast, Symbol):
+        if ast in env: return env[ast]
+        raise Error(f"'{ast}' not found")
+    if isinstance(ast, Map):
+        return Map((k, eval_(v, env)) for k, v in ast.items())
+    if isinstance(ast, Vector):
+        return Vector(eval_(x, env) for x in ast)
+    if isinstance(ast, List):
+        if not ast: return ast
+        first = ast[0]
+        if isinstance(first, Symbol):
+            if first == 'def!':
+                val = eval_(ast[2], env)
+                env[ast[1]] = val
+                return val
+            if first == 'let*':
+                let_env = Env(mappings={}, outer=env)
+                items = list(ast[1])
+                for i in range(0, len(items), 2):
+                    let_env[items[i]] = eval_(items[i + 1], let_env)
+                return eval_(ast[2], let_env)
+        proc = eval_(first, env)
+        if isinstance(proc, Fn):
+            args = [eval_(x, env) for x in ast[1:]]
+            return proc.call(args)
+        raise Error(f'cannot apply {proc}')
+    return ast
+
+
+Now modify it for step4. Changes needed:
+
+1. Add Nil, Boolean, String to the import line
+2. Add THREE new special forms inside the `if isinstance(first, Symbol):` block, AFTER `let*` and BEFORE the function call logic:
+   - do: evaluate all ast[1:], return last result. If no elements, return Nil.NIL.
+   - if: cond = eval_(ast[1], env). If cond is not Nil.NIL and cond is not Boolean.FALSE: return eval_(ast[2], env). Elif len(ast) > 3: return eval_(ast[3], env). Else: return Nil.NIL.
+   - fn*: return Fn(lambda args: eval_(ast[2], call_env(env, ast[1], args)))
+3. Keep everything else exactly the same: imports, Map eval, Vector eval, List eval, proc call, return ast base case.
+4. Replace repl_env with:
+   repl_env = Env(mappings={})
+   for name, fn in core.ns.items():
+       repl_env[name] = fn
+   eval_(read('(def! not (fn* (a) (if a false true)))'), repl_env)
+5. Main loop: for line in sys.stdin, strip, skip empty, try: print(str(eval_(read(line), repl_env))), except Exception as exc: print(f'Error: {exc}')
+
+DO NOT change any existing code. Only ADD the three new special forms and update imports/repl_env.
+Write the COMPLETE file. No markdown fences. No comments.

@@ -1,0 +1,13 @@
+Total output lines: 111
+First 5 lines:
+  [0]: 'mal-user> '
+  [1]: '"hello"'
+  [2]: 'false'
+  [3]: '(atom {"+" #<function>})'
+  [4]: '{"+" #<function> "-" #<function>}'
+Last 5 lines:
+  [106]: 'false'
+  [107]: '#<function>'
+  [108]: '#<macro>'
+  [109]: 'true'
+  [110]: 'false'

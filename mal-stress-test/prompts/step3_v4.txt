@@ -1,0 +1,68 @@
+Copy this code exactly as-is. Do NOT add any extra features or special forms.
+
+```
+import sys
+from mal_types import Number, Symbol, List, Vector, Map, Fn, Error, Env
+from reader import read
+
+
+def eval_(ast, env):
+    if isinstance(ast, Symbol):
+        if ast in env:
+            return env[ast]
+        raise Error(f"'{ast}' not found")
+    if isinstance(ast, Map):
+        return Map((k, eval_(v, env)) for k, v in ast.items())
+    if isinstance(ast, Vector):
+        return Vector(eval_(x, env) for x in ast)
+    if isinstance(ast, List):
+        if not ast:
+            return ast
+        first = ast[0]
+        if isinstance(first, Symbol):
+            if first == 'def!':
+                val = eval_(ast[2], env)
+                env[ast[1]] = val
+                return val
+            if first == 'let*':
+                let_env = Env(outer=env)
+                items = list(ast[1])
+                for i in range(0, len(items), 2):
+                    let_env[items[i]] = eval_(items[i + 1], let_env)
+                return eval_(ast[2], let_env)
+        proc = eval_(first, env)
+        if isinstance(proc, Fn):
+            args = [eval_(x, env) for x in ast[1:]]
+            return proc.call(args)
+        raise Error(f'cannot apply {proc}')
+    return ast
+
+
+def rep(source, env):
+    return str(eval_(read(source), env))
+
+
+repl_env = Env(mappings={
+    '+': Fn(lambda a: Number(a[0] + a[1])),
+    '-': Fn(lambda a: Number(a[0] - a[1])),
+    '*': Fn(lambda a: Number(a[0] * a[1])),
+    '/': Fn(lambda a: Number(a[0] // a[1])),
+})
+
+
+def main():
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            print(rep(line, repl_env))
+        except Exception as exc:
+            print(f'Error: {exc}')
+
+
+if __name__ == '__main__':
+    main()
+```
+
+Output this code verbatim. No additions. No markdown fences. Just the Python code.

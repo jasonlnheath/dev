@@ -1,0 +1,29 @@
+Fix step5 for full TCO. Two issues:
+
+1. fn* must store TCO info on the Fn object.
+2. Function calls must use TCO when available.
+
+Import TCOEnv: add TCOEnv to the import from mal_types.
+
+Change fn* to:
+    if first == 'fn*':
+        ast_body = ast[2]
+        ast_parms = ast[1]
+        closure_env = env
+        def fenv(f_args):
+            return call_env(closure_env, ast_parms, f_args)
+        def call(f_args):
+            return eval_(ast_body, fenv(f_args))
+        return Fn(call, TCOEnv(ast_body, fenv))
+
+Change function call to check tco_env:
+    proc = eval_(first, env)
+    if isinstance(proc, Fn):
+        args = [eval_(x, env) for x in ast[1:]]
+        if proc.tco_env:
+            ast = proc.tco_env.body
+            env = proc.tco_env.fenv(args)
+            continue
+        return proc.call(args)
+
+Everything else stays the same. Write the COMPLETE file. No markdown fences. No comments.

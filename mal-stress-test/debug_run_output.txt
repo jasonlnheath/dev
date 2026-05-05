@@ -1,0 +1,5 @@
+STDOUT:
+  Output 1: 'mal-user> '
+  Output 2: '"hello"'
+  Output 3: 'false'
+STDERR: 'Mal [python.2]\n'

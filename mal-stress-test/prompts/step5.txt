@@ -1,0 +1,237 @@
+Write step5_tco.py. It is step4_if_fn_do.py with ONE change: tail call optimization in eval_.
+
+The change: replace recursion with a while loop. At the TOP of eval_, add `while True:`. Then instead of returning from recursive calls to eval_, UPDATE ast and env and `continue`. Only `return` for non-recursive cases.
+
+Specifically, the List branch becomes:
+
+```python
+if isinstance(ast, List):
+    if not ast:
+        return ast
+    first = ast[0]
+    if isinstance(first, Symbol):
+        if first == 'def!':
+            val = eval_(ast[2], env)
+            env[ast[1]] = val
+            return val
+        if first == 'let*':
+            let_env = Env(mappings={}, outer=env)
+            items = list(ast[1])
+            for i in range(0, len(items), 2):
+                let_env[items[i]] = eval_(items[i + 1], let_env)
+            ast = ast[2]
+            env = let_env
+            continue
+        if first == 'do':
+            for x in ast[1:-1]:
+                eval_(x, env)
+            ast = ast[-1]
+            continue
+        if first == 'if':
+            cond = eval_(ast[1], env)
+            if cond is not Nil.NIL and cond is not Boolean.FALSE:
+                ast = ast[2]
+            elif len(ast) > 3:
+                ast = ast[3]
+            else:
+                return Nil.NIL
+            continue
+    proc = eval_(first, env)
+    if isinstance(proc, Fn):
+        args = [eval_(x, env) for x in ast[1:]]
+        ast, env = proc.call_tco(args)
+        continue
+    raise Error(f'cannot apply {proc}')
+```
+
+The key insight: let*, do, and if in tail position UPDATE ast/env and continue. fn* returns a closure. When calling a fn* closure, instead of recursing, we get back new (ast, env) and loop.
+
+To make this work, fn* must return a closure that can either:
+- Return a final result directly
+- Return a tuple (new_ast, new_env) for TCO
+
+Use this pattern for fn*:
+```python
+if first == 'fn*':
+    params, body = ast[1], ast[2]
+    def make_closure(captured_env):
+        def closure(args):
+            return (body, call_env(captured_env, params, args))
+        closure.is_mal_fn = True
+        return closure
+    return Fn(make_closure(env))
+```
+
+And the function call becomes:
+```python
+proc = eval_(first, env)
+if isinstance(proc, Fn):
+    args = [eval_(x, env) for x in ast[1:]]
+    result = proc.call(args)
+    if hasattr(result, '__iter__') and hasattr(getattr(proc, 'call', None), 'is_mal_fn') if hasattr(proc, 'call') else getattr(result, 'is_mal_fn', False) if callable(result) else False:
+        ast, env = result
+        continue
+    return result
+```
+
+Actually that's too complex. Use a simpler approach: wrap the TCO result in a sentinel class:
+
+```python
+class TCOResult:
+    def __init__(self, ast, env):
+        self.ast = ast
+        self.env = env
+```
+
+Then fn* returns:
+```python
+if first == 'fn*':
+    params, body = ast[1], ast[2]
+    def make_closure(captured_env):
+        def closure(args):
+            return TCOResult(body, call_env(captured_env, params, args))
+        return closure
+    return Fn(make_closure(env))
+```
+
+And the function call checks for TCOResult:
+```python
+proc = eval_(first, env)
+if isinstance(proc, Fn):
+    args = [eval_(x, env) for x in ast[1:]]
+    result = proc.call(args)
+    if isinstance(result, TCOResult):
+        ast, env = result.ast, result.env
+        continue
+    return result
+```
+
+BUT: core functions (from core.py) return regular values, not TCOResult. So only fn* closures return TCOResult.
+
+Hmm actually, the simplest approach used by most MAL implementations: just check if the callable has a special attribute. Let me simplify.
+
+Use this EXACT structure:
+
+```python
+import sys
+from mal_types import Number, Symbol, List, Vector, Map, Fn, Error, Env, Nil, Boolean, String
+from reader import read
+from env import call_env
+import core
+
+
+def eval_(ast, env):
+    while True:
+        if isinstance(ast, Symbol):
+            if ast in env:
+                return env[ast]
+            raise Error(f"'{ast}' not found")
+        if isinstance(ast, Map):
+            return Map((k, eval_(v, env)) for k, v in ast.items())
+        if isinstance(ast, Vector):
+            return Vector(eval_(x, env) for x in ast)
+        if not isinstance(ast, List):
+            return ast
+        if not ast:
+            return ast
+
+        first = ast[0]
+        if isinstance(first, Symbol):
+            if first == 'def!':
+                val = eval_(ast[2], env)
+                env[ast[1]] = val
+                return val
+            if first == 'let*':
+                let_env = Env(mappings={}, outer=env)
+                items = list(ast[1])
+                for i in range(0, len(items), 2):
+                    let_env[items[i]] = eval_(items[i + 1], let_env)
+                ast = ast[2]
+                env = let_env
+                continue
+            if first == 'do':
+                for x in ast[1:-1]:
+                    eval_(x, env)
+                ast = ast[-1]
+                continue
+            if first == 'if':
+                cond = eval_(ast[1], env)
+                if cond is not Nil.NIL and cond is not Boolean.FALSE:
+                    ast = ast[2]
+                elif len(ast) > 3:
+                    ast = ast[3]
+                else:
+                    return Nil.NIL
+                continue
+            if first == 'fn*':
+                params, body = ast[1], ast[2]
+                def make_closure(captured_env):
+                    def closure(args):
+                        return eval_(body, call_env(captured_env, params, args))
+                    return closure
+                return Fn(make_closure(env))
+
+        proc = eval_(first, env)
+        if isinstance(proc, Fn):
+            args = [eval_(x, env) for x in ast[1:]]
+            return proc.call(args)
+        raise Error(f'cannot apply {proc}')
+
+
+def main():
+    repl_env = Env(mappings={})
+    for name, fn in core.ns.items():
+        repl_env[name] = fn
+    eval_(read('(def! not (fn* (a) (if a false true)))'), repl_env)
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            print(str(eval_(read(line), repl_env)))
+        except Exception as exc:
+            print(f'Error: {exc}')
+
+
+if __name__ == '__main__':
+    main()
+```
+
+Wait, that's NOT TCO. The fn* closure still calls eval_ recursively. For TCO, the fn* call should NOT recurse — it should return the new (ast, env) to the while loop.
+
+Here is the CORRECT TCO approach. The fn* closure returns a special marker instead of calling eval_:
+
+```python
+class _TCO:
+    __slots__ = ('ast', 'env')
+    def __init__(self, ast, env):
+        self.ast = ast
+        self.env = env
+```
+
+Then in the function call:
+```python
+proc = eval_(first, env)
+if isinstance(proc, Fn):
+    args = [eval_(x, env) for x in ast[1:]]
+    result = proc.call(args)
+    if isinstance(result, _TCO):
+        ast = result.ast
+        env = result.env
+        continue
+    return result
+```
+
+And fn*:
+```python
+if first == 'fn*':
+    params, body = ast[1], ast[2]
+    def make_closure(captured_env):
+        def closure(args):
+            return _TCO(body, call_env(captured_env, params, args))
+        return closure
+    return Fn(make_closure(env))
+```
+
+Write the COMPLETE file with this TCO pattern. No markdown fences.

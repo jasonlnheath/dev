@@ -1,0 +1,35 @@
+Implement step3_env.py for a MAL (Make a Lisp) interpreter in Python.
+
+EXACT imports to use:
+  import sys
+  from mal_types import Number, Symbol, List, Vector, Map, Fn, Error, Env
+  from reader import read
+
+CRITICAL TYPE RULES (do NOT break these):
+- Number EXTENDS int. No .value. Number(5) IS 5. Create: Number(a+b). Use: a[0]+a[1].
+- Symbol EXTENDS str. Compare: first == 'def!' (NOT Symbol('def!')).
+- Fn has .call(args). Call: fn.call(args). Do NOT use fn(args).
+- Env is a ChainMap. env[key]=val to set. env[key] to get. Env(outer=env) for child.
+- env keys are strings (Symbol auto-converts since it extends str).
+
+eval_ function must handle:
+1. Symbol: if ast in env: return env[ast], else raise Error(f"'{ast}' not found")
+2. Map: return Map((k, eval_(v, env)) for k, v in ast.items())
+3. Vector: return Vector(eval_(x, env) for x in ast)
+4. List (empty): return ast
+5. List with special forms (check BEFORE evaluating first):
+   - def!: val = eval_(ast[2], env); env[ast[1]] = val; return val
+   - let*: let_env = Env(outer=env); process ast[1] as flat pairs (every 2 items); return eval_(ast[2], let_env)
+6. List as function call: proc = eval_(first, env); if isinstance(proc, Fn): return proc.call([eval_(x, env) for x in ast[1:]])
+7. Otherwise return ast
+
+repl_env = Env(mappings={
+    '+': Fn(lambda a: Number(a[0] + a[1])),
+    '-': Fn(lambda a: Number(a[0] - a[1])),
+    '*': Fn(lambda a: Number(a[0] * a[1])),
+    '/': Fn(lambda a: Number(a[0] // a[1])),
+})
+
+Main: for line in sys.stdin, strip, skip empty, try: print(eval_(read(line), repl_env)), except: print(f'Error: {exc}')
+
+Write the COMPLETE Python file. No comments. No markdown fences.

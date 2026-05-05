@@ -1,0 +1,40 @@
+Fix step3_env.py. Two bugs:
+
+BUG 1: Missing base case. After checking Symbol, Map, Vector, List, add `return ast` for all other types (Number, String, Nil, etc).
+
+BUG 2: Function call logic is outside the List isinstance block. It must be inside.
+
+Correct structure:
+
+def eval_(ast, env):
+    if isinstance(ast, Symbol):
+        if ast in env: return env[ast]
+        raise Error(f"'{ast}' not found")
+    if isinstance(ast, Map):
+        return Map((k, eval_(v, env)) for k, v in ast.items())
+    if isinstance(ast, Vector):
+        return Vector(eval_(x, env) for x in ast)
+    if isinstance(ast, List):
+        if not ast: return ast
+        first = ast[0]
+        if isinstance(first, Symbol):
+            if first == 'def!':
+                val = eval_(ast[2], env)
+                env[ast[1]] = val
+                return val
+            if first == 'let*':
+                let_env = Env(mappings={}, outer=env)
+                items = list(ast[1])
+                for i in range(0, len(items), 2):
+                    let_env[items[i]] = eval_(items[i + 1], let_env)
+                return eval_(ast[2], let_env)
+        proc = eval_(first, env)
+        if isinstance(proc, Fn):
+            args = [eval_(x, env) for x in ast[1:]]
+            return proc.call(args)
+        raise Error(f'cannot apply {proc}')
+    return ast
+
+Note: first == 'def!' works because Symbol extends str.
+
+Write the COMPLETE file. No markdown fences.

@@ -1,0 +1,33 @@
+Fix step4_if_fn_do.py. ONE bug: missing base case.
+
+After all the isinstance checks (Symbol, Map, Vector, List), add:
+    return ast
+
+This handles Number, Nil, Boolean, String, etc. Without it, those types fall through to `eval_(ast[0], env)` which crashes because they are not subscriptable.
+
+Also move the function call logic (proc = eval_(ast[0], env)...) INSIDE the List isinstance block. Use this structure:
+
+def eval_(ast, env):
+    if isinstance(ast, Symbol):
+        ...raise Error
+    if isinstance(ast, Map):
+        return Map(...)
+    if isinstance(ast, Vector):
+        return Vector(...)
+    if isinstance(ast, List):
+        if not ast: return ast
+        first = ast[0]
+        if isinstance(first, Symbol):
+            if first == 'def!': ...
+            if first == 'let*': ...
+            if first == 'do': ...
+            if first == 'if': ...
+            if first == 'fn*': ...
+        proc = eval_(first, env)
+        if isinstance(proc, Fn):
+            args = [eval_(x, env) for x in ast[1:]]
+            return proc.call(args)
+        raise Error(f'cannot apply {proc}')
+    return ast
+
+Write the COMPLETE file. No markdown fences. No comments.

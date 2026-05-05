@@ -1,0 +1,83 @@
+{
+  "test_cmd": "python run_test.py {test} python {impl}",
+  "model": "qwen36",
+  "hint_model": "glm47",
+  "timeout": 900,
+  "max_retries": 8,
+  "reference_dir": "C:\\dev\\mal\\impls\\python3",
+  "preamble": "IMPORTANT NAMING RULES:\n- Use 'mal_types.py' (NOT 'types.py') for MAL type definitions - 'types.py' shadows Python's stdlib\n- Use 'mal_readline.py' (NOT 'readline.py') for readline - same reason\n- All imports must use 'mal_types' not 'types'\n- Do NOT print a prompt like 'user> ' - tests use piped stdin\n- Handle EOF gracefully",
+  "stagnation_callback": {
+    "threshold": 2,
+    "exit_code": 42,
+    "signal_file": ".ooda_stuck",
+    "hint_file": ".ooda_hint"
+  },
+  "steps": [
+    {
+      "name": "step0_repl",
+      "test": "tests/step0_repl.mal",
+      "impl": "step0_repl.py",
+      "requirements": "Step 0: Basic REPL echo\n- READ(str): return str unchanged\n- EVAL(ast,env): return ast unchanged\n- PRINT(exp): return exp unchanged\n- rep(str): return PRINT(EVAL(READ(str),\"\"))\n- Main loop: read lines from stdin with input(), print each line back\n- Do NOT print a prompt like 'user> '\n- Handle EOF (KeyboardInterrupt or empty) gracefully"
+    },
+    {
+      "name": "step1_read_print",
+      "test": "tests/step1_read_print.mal",
+      "impl": "step1_read_print.py",
+      "requirements": "Step 1: Reader and Printer\n- READ(str): call reader.read_str(str) - tokenize and parse into MAL AST\n- EVAL(ast,env): return ast unchanged\n- PRINT(exp): call printer.pr_str(exp) - convert AST back to string\n- Main loop: read lines, print rep result, catch and print errors\n- Do NOT print 'user> ' prompt\n\nCreate these files:\n1. mal_types.py - MAL type wrappers\n2. reader.py - tokenize() and read_str(). Handle: parens/brackets/braces, strings with escapes, numbers, symbols, ; comments, @x => (deref x), backtick-x => (quasiquote x), ~x => (unquote x), ~@x => (splice-unquote x)\n3. printer.py - pr_str(val). Lists as (a b c), vectors as [a b c], hashmaps as {k v}, strings with quotes, nil, true/false\n4. step1_read_print.py - main REPL using READ/EVAL/PRINT/rep"
+    },
+    {
+      "name": "step2_eval",
+      "test": "tests/step2_eval.mal",
+      "impl": "step2_eval.py",
+      "requirements": "Step 2: EVAL with arithmetic\n- Add EVAL that evaluates: numbers/strings/nil/true/false return themselves\n- Symbols: look up in repl_env dict\n- Lists: eval all elements, apply first element as function to rest\n- Add +, -, *, / to repl_env (use operator module)\n- Create step2_eval.py based on step1"
+    },
+    {
+      "name": "step3_env",
+      "test": "tests/step3_env.mal",
+      "impl": "step3_env.py",
+      "requirements": "Step 3: Environments\n- Create env.py with Env class (data dict, outer Env pointer, binds/exprs)\n- def!: define symbol in current env\n- let*: create new env with bindings, evaluate body\n- Create step3_env.py"
+    },
+    {
+      "name": "step4_if_fn_do",
+      "test": "tests/step4_if_fn_do.mal",
+      "impl": "step4_if_fn_do.py",
+      "requirements": "Step 4: Control flow (if, fn*, do)\n- do: evaluate all expressions, return last\n- if: evaluate condition, then/else branches\n- fn*: create closure (function with captured env, params, body)\n- Create step4_if_fn_do.py"
+    },
+    {
+      "name": "step5_tco",
+      "test": "tests/step5_tco.mal",
+      "impl": "step5_tco.py",
+      "requirements": "Step 5: Tail Call Optimization\n- Detect tail positions in: if (both branches), do (last), fn* (body)\n- Use a while True loop in eval_ instead of recursive calls\n- When a tail call is detected, set ast/env and continue the loop\n- Apply TCO to: let* (body), do (last expr), if (branch), fn* self-calls\n- Create step5_tco.py"
+    },
+    {
+      "name": "step6_file",
+      "test": "tests/step6_file.mal",
+      "impl": "step6_file.py",
+      "requirements": "Step 6: File loading\n- load-file: read file, wrap in (do ...), eval in repl_env\n- eval: expose eval_ to MAL via repl_env\n- argv: command line args as *ARGV*\n- *host-language*: set to 'python'\n- Create step6_file.py"
+    },
+    {
+      "name": "step7_quote",
+      "test": "tests/step7_quote.mal",
+      "impl": "step7_quote.py",
+      "requirements": "Step 7: Quoting\n- quote: return AST unevaluated\n- quasiquote: expand with unquote and splice-unquote\n- qq_loop and qq_foldr helper functions for quasiquote expansion\n- Create step7_quote.py"
+    },
+    {
+      "name": "step8_macros",
+      "test": "tests/step8_macros.mal",
+      "impl": "step8_macros.py",
+      "requirements": "Step 8: Macros\n- defmacro!: define a macro (like def! but marks as macro)\n- macroexpand: expand macros in AST (call before eval)\n- After macroexpand, if result is not a List, continue the eval loop (not return)\n- Define cond macro in repl_env\n- Create step8_macros.py"
+    },
+    {
+      "name": "step9_try",
+      "test": "tests/step9_try.mal",
+      "impl": "step9_try.py",
+      "requirements": "Step 9: Exception handling\n- try*/catch*: catch MAL exceptions (ThrownException) and Python exceptions separately\n- throw: raise ThrownException with a MAL value\n- For ThrownException: bind exc.form to catch variable\n- For other exceptions: wrap str(exc) in String() for catch variable\n- Create step9_try.py"
+    },
+    {
+      "name": "stepA_mal",
+      "test": "tests/stepA_mal.mal",
+      "impl": "stepA_mal.py",
+      "requirements": "Step A: Complete MAL\n- atom/swap!/reset!: mutable reference types\n- Time-based functions: time-ms\n- String functions: pr-str, str, prn, println, readline\n- Set *host-language* to 'python'\n- Define cond macro and load-file\n- Non-interactive: read from stdin, no prompt\n- Wrap errors as print(f'Error: {exc}') not traceback\n- Create stepA_mal.py"
+    }
+  ]
+}

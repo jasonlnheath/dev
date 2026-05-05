@@ -1,0 +1,20 @@
+The step3_env.py code is almost correct but has ONE bug.
+
+In the let* handler, change:
+    let_env = Env(outer=env)
+To:
+    let_env = Env(mappings={}, outer=env)
+
+Reason: The Env class __init__ has three branches:
+1. binds is not None → chains to outer
+2. mappings is not None → chains to outer
+3. else → just super().__init__() with NO chaining
+
+So Env(outer=env) without mappings= falls to branch 3 and doesn't chain to the parent env. That's why '+' and 'a' are not found inside let*.
+
+Fix ONLY this one line. Keep everything else identical. Write the complete file.
+
+Imports:
+  import sys
+  from mal_types import Number, Symbol, List, Vector, Map, Fn, Error, Env
+  from reader import read

@@ -1,0 +1,29 @@
+{
+  "listen_port": 8080,
+  "listen_host": "0.0.0.0",
+  "health_interval": 5,
+  "request_timeout": 600,
+  "auth": {
+    "api_key": "qwen-lb-2f1cf189d556f21c4b2f1c6ccc5121fd",
+    "trusted_subnets": [
+      "192.168.0.0/16",
+      "10.0.0.0/8",
+      "172.16.0.0/12",
+      "127.0.0.0/8"
+    ]
+  },
+  "backends": [
+    {"host": "127.0.0.1", "port": 8033, "name": "local", "priority": 1},
+    {"host": "192.168.1.201", "port": 8033, "name": "remote", "priority": 2}
+  ],
+  "routing": "priority_fallback",
+  "max_tokens_per_request": 25000,
+  "watchdog": {
+    "enabled": true,
+    "poll_interval": 10,
+    "vram_free_threshold_mb": 4096,
+    "cooldown_seconds": 60,
+    "trigger_count": 2,
+    "server_cmd": ""
+  }
+}

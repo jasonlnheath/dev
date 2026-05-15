@@ -538,5 +538,203 @@ def load_config_local(path):
     return load_config(path)
 
 
+# ===========================================================================
+# BACKPRESSURE TESTS
+# ===========================================================================
+
+class TestBackpressureBackendState(unittest.TestCase):
+    """Tests for queue depth tracking in BackendState."""
+
+    def setUp(self):
+        from lb import BackendState
+        self.BackendState = BackendState
+
+    def test_default_queue_depth_is_five(self):
+        """Default max queue depth should be 5."""
+        state = self.BackendState("127.0.0.1", 19999)
+        self.assertEqual(state.max_queue_depth, 5)
+
+    def test_custom_queue_depth(self):
+        """max_queue_depth should be configurable."""
+        state = self.BackendState("127.0.0.1", 19999, max_queue_depth=3)
+        self.assertEqual(state.max_queue_depth, 3)
+
+    def test_not_saturated_when_empty(self):
+        """Backend should NOT be saturated when queue is empty."""
+        state = self.BackendState("127.0.0.1", 19999, max_queue_depth=5)
+        state.update_health(True, slots_idle=2, slots_processing=0)
+        self.assertFalse(state.is_saturated())
+
+    def test_not_saturated_under_limit(self):
+        """Backend should NOT be saturated when queue depth < max."""
+        state = self.BackendState("127.0.0.1", 19999, max_queue_depth=5)
+        state.update_health(True, slots_idle=0, slots_processing=3)
+        state.active_requests = 1
+        # 3 slots + 1 active = 4 < 5
+        self.assertFalse(state.is_saturated())
+
+    def test_saturated_at_limit(self):
+        """Backend should be saturated when queue depth == max."""
+        state = self.BackendState("127.0.0.1", 19999, max_queue_depth=5)
+        state.update_health(True, slots_idle=0, slots_processing=3)
+        state.active_requests = 2
+        # 3 slots + 2 active = 5 == 5
+        self.assertTrue(state.is_saturated())
+
+    def test_saturated_over_limit(self):
+        """Backend should be saturated when queue depth > max."""
+        state = self.BackendState("127.0.0.1", 19999, max_queue_depth=5)
+        state.update_health(True, slots_idle=0, slots_processing=4)
+        state.active_requests = 2
+        # 4 slots + 2 active = 6 > 5
+        self.assertTrue(state.is_saturated())
+
+    def test_active_requests_increment(self):
+        """increment_active should increase counter."""
+        state = self.BackendState("127.0.0.1", 19999)
+        self.assertEqual(state.active_requests, 0)
+        state.increment_active()
+        self.assertEqual(state.active_requests, 1)
+        state.increment_active()
+        state.increment_active()
+        self.assertEqual(state.active_requests, 3)
+
+    def test_active_requests_decrement(self):
+        """decrement_active should decrease counter."""
+        state = self.BackendState("127.0.0.1", 19999)
+        state.active_requests = 3
+        state.decrement_active()
+        self.assertEqual(state.active_requests, 2)
+        state.decrement_active()
+        state.decrement_active()
+        self.assertEqual(state.active_requests, 0)
+
+    def test_active_requests_can_go_negative(self):
+        """decrement_active can go below zero if over-called (no guards)."""
+        state = self.BackendState("127.0.0.1", 19999)
+        state.active_requests = 1
+        state.decrement_active()
+        state.decrement_active()
+        self.assertEqual(state.active_requests, -1)
+
+    def test_to_dict_includes_active_requests(self):
+        """BackendState.to_dict() should include active_requests and queue_depth."""
+        state = self.BackendState("127.0.0.1", 19999, max_queue_depth=5)
+        state.update_health(True, slots_idle=1, slots_processing=2)
+        state.active_requests = 1
+        d = state.to_dict()
+        self.assertEqual(d["active_requests"], 1)
+        self.assertEqual(d["queue_depth"], 3)  # 2 processing + 1 active
+
+
+class TestBackpressureIntegration(unittest.TestCase):
+    """Integration tests for backpressure in the proxy."""
+
+    @classmethod
+    def setUpClass(cls):
+        """Start a fake backend and proxy with low queue depth."""
+        cls.backend_port = 19093
+        cls.srv, _ = start_fake_backend(cls.backend_port, slots_idle=2)
+
+        cls.config_path = os.path.join(
+            os.path.dirname(__file__), "_test_cfg_backpressure.json"
+        )
+        write_test_config(
+            cls.config_path,
+            backends=[{"host": "127.0.0.1", "port": cls.backend_port, "name": "test"}],
+            max_queue_depth=2,  # Low queue depth for testing
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        if os.path.exists(cls.config_path):
+            os.unlink(cls.config_path)
+
+    def test_request_succeeds_when_not_saturated(self):
+        """Normal request should succeed when queue is under limit."""
+        import urllib.request
+        from lb import LoadBalancer
+
+        cfg = load_config_local(self.config_path)
+        lb = LoadBalancer(cfg)
+        lb.start(blocking=False)
+        time.sleep(1)
+
+        try:
+            proxy_port = lb.server.server_address[1]
+            url = f"http://127.0.0.1:{proxy_port}/v1/chat/completions"
+            data = json.dumps({
+                "model": "qwen",
+                "messages": [{"role": "user", "content": "hi"}],
+            }).encode()
+            req = urllib.request.Request(
+                url, data=data, headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                self.assertEqual(resp.status, 200)
+                result = json.loads(resp.read())
+                self.assertIn("choices", result)
+        finally:
+            lb.stop()
+
+    def test_health_shows_active_requests(self):
+        """Proxy /health should include active_requests in response."""
+        import urllib.request
+        from lb import LoadBalancer
+
+        cfg = load_config_local(self.config_path)
+        lb = LoadBalancer(cfg)
+        lb.start(blocking=False)
+        time.sleep(1)
+
+        try:
+            proxy_port = lb.server.server_address[1]
+            url = f"http://127.0.0.1:{proxy_port}/health"
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                result = json.loads(resp.read())
+                self.assertIn("active_requests", result)
+                # Backend state should also include queue_depth
+                for b in result["backends"]:
+                    self.assertIn("queue_depth", b)
+                    self.assertIn("active_requests", b)
+        finally:
+            lb.stop()
+
+    def test_request_rejected_when_saturated(self):
+        """Request should get 429 when backend queue is full."""
+        import urllib.request
+        from lb import LoadBalancer
+
+        cfg = load_config_local(self.config_path)
+        lb = LoadBalancer(cfg)
+        lb.start(blocking=False)
+        time.sleep(1)
+
+        try:
+            proxy_port = lb.server.server_address[1]
+            # Force backend into saturated state
+            # Set slots_processing + active_requests >= max_queue_depth
+            for state in lb.states:
+                state.update_health(True, slots_idle=0, slots_processing=2)
+                state.active_requests = 0
+
+            url = f"http://127.0.0.1:{proxy_port}/v1/chat/completions"
+            data = json.dumps({
+                "model": "qwen",
+                "messages": [{"role": "user", "content": "hi"}],
+            }).encode()
+            req = urllib.request.Request(
+                url, data=data, headers={"Content-Type": "application/json"}
+            )
+            try:
+                urllib.request.urlopen(req, timeout=5)
+                self.fail("Should have raised HTTPError 429")
+            except urllib.error.HTTPError as e:
+                self.assertEqual(e.code, 429)
+        finally:
+            lb.stop()
+
+
 if __name__ == "__main__":
     unittest.main()

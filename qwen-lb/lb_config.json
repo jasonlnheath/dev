@@ -18,6 +18,7 @@
   ],
   "routing": "priority_fallback",
   "max_tokens_per_request": 25000,
+  "max_queue_depth": 5,
   "watchdog": {
     "enabled": true,
     "poll_interval": 10,

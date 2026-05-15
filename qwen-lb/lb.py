@@ -91,17 +91,32 @@ def check_auth(client_ip: str, api_key_header: str | None, expected_key: str, ne
 
 
 class BackendState:
-    def __init__(self, host: str, port: int, name: str = "", priority: int = 999):
+    def __init__(self, host: str, port: int, name: str = "", priority: int = 999, max_queue_depth: int = 5):
         self.host = host
         self.port = port
         self.name = name or f"{host}:{port}"
         self.priority = priority
+        self.max_queue_depth = max_queue_depth
         self.healthy = False
         self.slots_idle = 0
         self.slots_processing = 0
-        self.last_check = 0.0
+        self.active_requests = 0
         self.request_count = 0
+        self.last_check = 0.0
         self._lock = threading.Lock()
+
+    def is_saturated(self) -> bool:
+        """Check if backend has reached max queue depth."""
+        with self._lock:
+            return self.slots_processing + self.active_requests >= self.max_queue_depth
+
+    def increment_active(self):
+        with self._lock:
+            self.active_requests += 1
+
+    def decrement_active(self):
+        with self._lock:
+            self.active_requests -= 1
 
     def update_health(self, healthy: bool, slots_idle: int = 0, slots_processing: int = 0):
         with self._lock:
@@ -119,6 +134,8 @@ class BackendState:
                 "healthy": self.healthy,
                 "slots_idle": self.slots_idle,
                 "slots_processing": self.slots_processing,
+                "active_requests": self.active_requests,
+                "queue_depth": self.slots_processing + self.active_requests,
                 "last_check_ago": round(time.time() - self.last_check, 1) if self.last_check else None,
             }
 
@@ -129,6 +146,7 @@ def pick_backend(states: list[BackendState], config: dict = None) -> BackendStat
     Priority fallback: use highest-priority backends first, fall back to lower
     priority only when all higher-priority backends are fully saturated.
     Least-busy (default): pick the healthy backend with most idle slots.
+    Both modes check is_saturated() to respect queue depth limits.
     """
     healthy = [s for s in states if s.healthy]
     if not healthy:
@@ -144,18 +162,22 @@ def pick_backend(states: list[BackendState], config: dict = None) -> BackendStat
 
         for prio in sorted(by_priority.keys()):
             group = by_priority[prio]
-            # Check if any in this priority group has idle slots
-            available = [s for s in group if s.slots_idle > 0]
+            # Check if any in this priority group has capacity (not saturated)
+            available = [s for s in group if not s.is_saturated()]
             if available:
                 # Pick the one with most idle slots among same-priority
                 available.sort(key=lambda s: (-s.slots_idle, s.request_count))
                 return available[0]
-            # All backends at this priority are fully busy — fall through to next
+            # All backends at this priority are fully saturated — fall through to next
         return None  # Everything is saturated
 
     # Default: least-busy (most idle slots, then fewest requests)
-    healthy.sort(key=lambda s: (-s.slots_idle, s.request_count))
-    return healthy[0]
+    # Filter out saturated backends first
+    available = [s for s in healthy if not s.is_saturated()]
+    if not available:
+        return None
+    available.sort(key=lambda s: (-s.slots_idle, s.request_count))
+    return available[0]
 
 
 # ---------------------------------------------------------------------------
@@ -252,8 +274,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if not self._check_auth():
+            print("DEBUG: POST auth rejected", file=sys.stderr)
             self.send_error(401, "Unauthorized")
             return
+        print(f"DEBUG: POST received path={self.path} client={self.client_address}", file=sys.stderr)
         self._forward("POST")
 
     def _handle_aggregate_health(self):
@@ -261,12 +285,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
         healthy = sum(1 for b in backends if b["healthy"])
         total_slots = sum(b["slots_idle"] + b["slots_processing"] for b in backends)
         idle_slots = sum(b["slots_idle"] for b in backends)
+        active_requests = sum(b["active_requests"] for b in backends)
         body = json.dumps({
             "status": "ok" if healthy > 0 else "degraded",
             "healthy_backends": healthy,
             "total_backends": len(backends),
             "total_slots": total_slots,
             "idle_slots": idle_slots,
+            "active_requests": active_requests,
             "backends": backends,
         })
         self.send_response(200)
@@ -283,18 +309,29 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_error(503, "No healthy backends")
             return
 
-        # Read request body if present
-        body = None
-        content_length = self.headers.get("Content-Length")
-        if content_length:
-            body = self.rfile.read(int(content_length))
-
-        # Clamp max_tokens for POST requests
-        if body and method == "POST":
-            body = self._clamp_body_max_tokens(body)
-
+        # Increment active_requests first (count ourselves), then check saturation.
+        # This prevents the race condition where multiple requests slip through
+        # between health polls because slots_processing is stale.
+        backend.request_count += 1
+        backend.increment_active()
         try:
-            backend.request_count += 1
+            sat = backend.is_saturated()
+            print(f"DEBUG: {backend.name} active={backend.active_requests} proc={backend.slots_processing} max_qd={backend.max_queue_depth} saturated={sat}", file=sys.stderr)
+            if sat:
+                backend.decrement_active()
+                self.send_error(429, "Queue full (max depth reached)")
+                return
+
+            # Read request body if present
+            body = None
+            content_length = self.headers.get("Content-Length")
+            if content_length:
+                body = self.rfile.read(int(content_length))
+
+            # Clamp max_tokens for POST requests
+            if body and method == "POST":
+                body = self._clamp_body_max_tokens(body)
+
             conn = http.client.HTTPConnection(
                 backend.host, backend.port,
                 timeout=self.lb.config.get("request_timeout", 600),
@@ -321,6 +358,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
             conn.close()
         except Exception as e:
             self.send_error(502, f"Backend error: {e}")
+        finally:
+            backend.decrement_active()
 
     def _stream_response(self, conn, resp):
         """Pipe SSE chunks from backend to client."""
@@ -376,8 +415,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
 class LoadBalancer:
     def __init__(self, config: dict):
         self.config = config
+        max_queue = config.get("max_queue_depth", 5)
         self.states = [
-            BackendState(b["host"], b["port"], b.get("name", ""))
+            BackendState(b["host"], b["port"], b.get("name", ""), b.get("priority", 999), max_queue)
             for b in config["backends"]
         ]
         self._checker: HealthChecker | None = None
@@ -387,8 +427,12 @@ class LoadBalancer:
         host = self.config["listen_host"]
         port = self.config["listen_port"]
 
+         # Custom server class with SO_REUSEADDR to handle TIME_WAIT sockets
+        class ReusableHTTPServer(ThreadingHTTPServer):
+            allow_reuse_address = True
+
         handler = type("Handler", (ProxyHandler,), {"lb": self})
-        self.server = ThreadingHTTPServer((host, port), handler)
+        self.server = ReusableHTTPServer((host, port), handler)
 
         # Start health checker
         self._checker = HealthChecker(self.states, self.config.get("health_interval", 5))

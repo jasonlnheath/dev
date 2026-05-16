@@ -303,23 +303,41 @@ class ProxyHandler(BaseHTTPRequestHandler):
     # Hard cap on max_tokens to prevent slow 10K-token generations on local Qwen
     MAX_TOKENS_CAP = 25000
 
-    def _forward(self, method: str):
+    # Status codes that trigger a retry on another backend
+    RETRY_STATUS_CODES = {400, 502, 504}
+
+    def _forward(self, method: str, _retried: set | None = None):
         backend = pick_backend(self.lb.states, self.lb.config)
         if backend is None:
-            self.send_error(503, "No healthy backends")
+            healthy = [s for s in self.lb.states if s.healthy]
+            if healthy and all(s.is_saturated() for s in healthy):
+                self.send_error(429, "All backends saturated")
+            else:
+                self.send_error(503, "No healthy backends")
             return
+
+        # Track which backends we've already tried for retry logic
+        if _retried is None:
+            _retried = set()
 
         # Increment active_requests first (count ourselves), then check saturation.
         # This prevents the race condition where multiple requests slip through
         # between health polls because slots_processing is stale.
         backend.request_count += 1
         backend.increment_active()
+        already_decremented = False
         try:
             sat = backend.is_saturated()
             print(f"DEBUG: {backend.name} active={backend.active_requests} proc={backend.slots_processing} max_qd={backend.max_queue_depth} saturated={sat}", file=sys.stderr)
             if sat:
+                already_decremented = True
                 backend.decrement_active()
-                self.send_error(429, "Queue full (max depth reached)")
+                # Retry on another backend instead of immediately returning 429
+                _retried.add(backend.name)
+                remaining = [s for s in self.lb.states if s.healthy and s.name not in _retried]
+                if remaining:
+                    return self._forward(method, _retried)
+                self.send_error(429, "Queue full (all backends saturated)")
                 return
 
             # Read request body if present
@@ -339,6 +357,24 @@ class ProxyHandler(BaseHTTPRequestHandler):
             conn.request(method, self.path, body=body, headers=self._filtered_headers())
             resp = conn.getresponse()
 
+            # Retry on retriable errors (e.g. 400 context overflow, 502, 504)
+            if resp.status in self.RETRY_STATUS_CODES and method == "POST":
+                error_body = resp.read()
+                conn.close()
+                already_decremented = True
+                backend.decrement_active()
+                _retried.add(backend.name)
+                remaining = [s for s in self.lb.states if s.healthy and s.name not in _retried]
+                if remaining:
+                    print(f"RETRY: {backend.name} returned {resp.status}, trying next backend", file=sys.stderr)
+                    return self._forward(method, _retried)
+                # No more backends — return the original error
+                self.send_response(resp.status)
+                self.send_header("Content-Type", resp.getheader("Content-Type", "text/plain"))
+                self.end_headers()
+                self.wfile.write(error_body)
+                return
+
             # Streaming?
             ct = resp.getheader("Content-Type", "")
             is_streaming = "text/event-stream" in ct
@@ -357,9 +393,18 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
             conn.close()
         except Exception as e:
+            # Connection error — retry on another backend
+            already_decremented = True
+            backend.decrement_active()
+            _retried.add(backend.name)
+            remaining = [s for s in self.lb.states if s.healthy and s.name not in _retried]
+            if remaining:
+                print(f"RETRY: {backend.name} connection error ({e}), trying next backend", file=sys.stderr)
+                return self._forward(method, _retried)
             self.send_error(502, f"Backend error: {e}")
         finally:
-            backend.decrement_active()
+            if not already_decremented:
+                backend.decrement_active()
 
     def _stream_response(self, conn, resp):
         """Pipe SSE chunks from backend to client."""
@@ -388,8 +433,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
         return headers
 
     def _clamp_body_max_tokens(self, body: bytes) -> bytes:
-        """Clamp max_tokens in JSON body to MAX_TOKENS_CAP. Returns (possibly new) body."""
-        cap = self.MAX_TOKENS_CAP
+        """Clamp max_tokens in JSON body to config cap. Returns (possibly new) body."""
+        cap = self.lb.config.get("max_tokens_per_request", self.MAX_TOKENS_CAP)
         if cap <= 0:
             return body
         try:

@@ -2,7 +2,7 @@
   "listen_port": 8080,
   "listen_host": "0.0.0.0",
   "health_interval": 5,
-  "request_timeout": 600,
+  "request_timeout": 1800,
   "auth": {
     "api_key": "qwen-lb-2f1cf189d556f21c4b2f1c6ccc5121fd",
     "trusted_subnets": [
@@ -17,7 +17,7 @@
     {"host": "192.168.1.201", "port": 8033, "name": "remote", "priority": 2}
   ],
   "routing": "priority_fallback",
-  "max_tokens_per_request": 25000,
+  "max_tokens_per_request": 131072,
   "max_queue_depth": 5,
   "watchdog": {
     "enabled": true,

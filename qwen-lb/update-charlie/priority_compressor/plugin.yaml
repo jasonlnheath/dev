@@ -1,0 +1,4 @@
+name: priority-compressor
+description: "Deterministic priority-based context compression (no LLM calls). Adapts claw.exe's line-priority algorithm: assigns priority levels to content lines, deduplicates, and selects within budget."
+version: "0.1.0"
+author: "Jason Heath"
